@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Titanic: Last Lifeboat</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #061220; overflow: hidden; font-family: system-ui, -apple-system, sans-serif; color: #e8eef5; touch-action: none; }
+  canvas { display: block; }
+  .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(3, 10, 20, 0.72); z-index: 10; padding: 16px; box-sizing: border-box; }
+  .hidden { display: none !important; }
+  .card { max-width: 680px; width: 100%; max-height: 100%; overflow-y: auto; background: rgba(10, 24, 42, 0.95); border: 1px solid #2c4a6b; border-radius: 14px; padding: 26px 30px; box-shadow: 0 20px 60px rgba(0,0,0,0.6); box-sizing: border-box; }
+  h1 { font-family: Georgia, serif; font-size: 42px; margin: 0 0 4px; letter-spacing: 2px; color: #ffd23f; text-align: center; }
+  h1 small { display: block; font-size: 15px; letter-spacing: 6px; color: #9fb3c8; margin-top: 4px; }
+  h2 { font-family: Georgia, serif; text-align: center; margin: 0 0 8px; font-size: 34px; }
+  h2.win { color: #3ddc84; } h2.lose { color: #ff7b7b; }
+  p { line-height: 1.5; color: #cfdbe8; }
+  .intro { text-align: center; font-style: italic; color: #9fb3c8; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 14px 0; }
+  .cols h3 { margin: 0 0 6px; font-size: 14px; color: #ffd23f; text-transform: uppercase; letter-spacing: 1px; }
+  .cols ul { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.55; color: #cfdbe8; }
+  kbd { background: #1f3550; border: 1px solid #3c5f86; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+  .red { color: #ff6b6b; font-weight: bold; } .grey { color: #aab8c6; font-weight: bold; } .green { color: #3ddc84; font-weight: bold; }
+  button { display: block; margin: 18px auto 0; background: #ffd23f; color: #1a1a1a; border: 0; border-radius: 10px; padding: 13px 34px; font-size: 18px; font-weight: bold; cursor: pointer; font-family: Georgia, serif; }
+  button:hover { background: #ffe27a; }
+  #best { text-align: center; color: #9fb3c8; font-size: 13px; margin-top: 10px; }
+  .center { text-align: center; }
+  #res-rank { text-align: center; font-size: 20px; color: #ffd23f; font-family: Georgia, serif; }
+  #res-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 14px; margin: 14px 0; color: #cfdbe8; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #1f3550; }
+  th { color: #9fb3c8; font-weight: normal; }
+  tr.me td { color: #ffd23f; font-weight: bold; }
+  @media (max-width: 560px) { .cols { grid-template-columns: 1fr; } h1 { font-size: 30px; } .card { padding: 18px; } }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="title" class="overlay hidden">
+  <div class="card">
+    <h1>TITANIC<small>LAST LIFEBOAT</small></h1>
+    <p class="intro">April 14th, 1912 — 23:40. The ship has struck an iceberg and is sinking by the bow.<br>There are not enough lifeboats for everyone. How long can you survive?</p>
+    <div class="cols">
+      <div>
+        <h3>1 · On the ship</h3>
+        <ul>
+          <li>Move with <kbd>WASD</kbd> / arrows, <kbd>Shift</kbd> to sprint and shove.</li>
+          <li>Lifeboats open at different times. Watch the map at the top.</li>
+          <li>Stand at a <span class="green">loading</span> gangway and <b>hold</b> <kbd>Space</kbd> to board. Only the person at the front can board, so push through the crowd.</li>
+          <li>The water rises from the bow. It freezes you fast, so keep to the dry stern.</li>
+          <li>Watch out for sliding deck chairs and pianos, and for collapsing funnels.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>2 · In the lifeboat</h3>
+        <ul>
+          <li>Steer with <kbd>←</kbd> <kbd>→</kbd>. Row hard with <kbd>↑</kbd> or <kbd>Space</kbd>, slow down with <kbd>↓</kbd>.</li>
+          <li>Hitting <b>any</b> iceberg sinks your boat.</li>
+          <li>Sharks with <span class="red">red-edged dark fins</span> are man-eaters and will capsize you. <span class="grey">Grey fins</span> are harmless.</li>
+          <li>Hold on until the <b>Carpathia</b> arrives at 04:10.</li>
+          <li>The earlier you board, the longer you must survive at sea.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="center" style="font-size:13px;color:#8aa">You and 59 other passengers. <kbd>P</kbd> pause · <kbd>M</kbd> mute · on touch screens use the left stick and the right button.</p>
+    <button id="start">Begin</button>
+    <div id="best"></div>
+  </div>
+</div>
+
+<div id="dead" class="overlay hidden">
+  <div class="card center">
+    <h2 class="lose">You did not survive</h2>
+    <p id="dead-cause" style="font-size:18px"></p>
+    <p id="dead-time"></p>
+    <p style="font-size:13px;color:#8aa">The night goes on for the other passengers…</p>
+    <button id="ff">See who survived</button>
+  </div>
+</div>
+
+<div id="results" class="overlay hidden">
+  <div class="card">
+    <h2 id="res-title"></h2>
+    <p id="res-sub" class="center"></p>
+    <div id="res-rank"></div>
+    <div id="res-stats"></div>
+    <table id="res-table"></table>
+    <button id="again">Play again</button>
+  </div>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
