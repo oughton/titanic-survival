@@ -171,7 +171,7 @@ function kill(p, cause) {
   if (p.isPlayer && !G.opts.playerBot) {
     G.phase = 'dead';
     G.deathCam = { x: p.x, y: p.y };
-    if (typeof onPlayerDeath === 'function') onPlayerDeath();
+    if (!G.opts.headless && typeof onPlayerDeath === 'function') onPlayerDeath();
   }
 }
 
@@ -215,16 +215,16 @@ function updateBoats(dt) {
       msg(`Boat ${b.id} (${b.side < 0 ? 'port' : 'starboard'}) is now loading — ${b.cap} seats!`, '#3ddc84');
     }
     if (b.state === 'loading') {
-      let c = null, cd = 26;
+      let c = null, cd = 30;
       for (const p of G.people) {
         if (p.state !== 'ship' || p.stun > 0) continue;
-        const d = dist(p.x, p.y, b.gx, b.gy);
+        const d = dist(p.x, p.y, b.gx, b.gy) - (p.isPlayer ? 6 : 0);
         if (d < cd) { cd = d; c = p; }
       }
       if (c !== b.boarder) { b.boarder = c; b.progress = 0; }
       if (c) {
         const human = c.isPlayer && !G.opts.playerBot;
-        const rate = human ? (input.action ? 1 / 1.2 : 0) : 1 / c.boardTime;
+        const rate = human ? (input.action ? 1 / 0.6 : 0) : 1 / c.boardTime;
         b.progress += rate * dt;
         if (b.progress >= 1) { board(c, b, i); b.boarder = null; b.progress = 0; }
       }
@@ -262,7 +262,7 @@ function updateSeaBoats(dt) {
     const p = 0.0015 + tau * 0.00002;
     if (Math.random() < p * dt) {
       b.state = 'lost';
-      const cause = Math.random() < 0.6 ? 'Lifeboat holed by an iceberg' : 'Lifeboat capsized by a shark';
+      const cause = Math.random() < 0.7 ? 'Lifeboat holed by an iceberg' : 'Lifeboat swamped in the freezing swell';
       for (const q of b.seats) kill(q, cause);
       if (b.seats.length) msg(`Lifeboat ${b.id} was lost at sea (${cause.toLowerCase().replace('lifeboat ', '')}).`, '#ff8f8f');
     }
@@ -447,20 +447,21 @@ function startOcean() {
   const b = G.boats[G.player.boat];
   G.ocean = {
     b, x: 0, y: 0, vx: 0, speed: 55, stamina: 1, ice: [], sharks: [], iceAcc: 0, sharkAcc: 0,
-    t0: G.t, carp: false, oar: 0, rowing: false, dead: false,
+    t0: G.t, carp: false, oar: 0, rowing: false, dead: false, helperT: rand(8, 14),
   };
   msg(`Boat ${b.id} is in the water. Survive until the Carpathia arrives!`, '#3ddc84');
-  msg('ALL icebergs will sink you. Sharks with RED fins will too — grey ones are harmless.', '#ffd23f');
-  for (let i = 0; i < 4; i++) spawnBerg(G.ocean, -rand(260, 680), 0);
+  msg('ALL icebergs will sink you. Golden-finned sharks may shove one out of your way!', '#ffd23f');
+  for (let i = 0; i < 5; i++) spawnBerg(G.ocean, -rand(260, 680), 0);
 }
 function spawnBerg(o, yOff, diff) {
-  const r = rand(14, 40) * (1 + 0.4 * diff);
+  const r = rand(16, 46) * (1 + 0.5 * diff);
   const n = 10, pts = [];
   for (let i = 0; i < n; i++) pts.push(rand(0.75, 1.12));
-  o.ice.push({ x: rand(-OCEAN_HALF, OCEAN_HALF), y: o.y + yOff, r, pts, vx: rand(-8, 8), rot: rand(0, 6.28) });
+  // some bergs drift toward the boat's line
+  const drifter = Math.random() < 0.2 + 0.25 * diff;
+  o.ice.push({ x: rand(-OCEAN_HALF, OCEAN_HALF), y: o.y + yOff, r, pts, vx: rand(-18, 18), rot: rand(0, 6.28), drifter, held: null });
 }
-function spawnShark(o, diff) {
-  const killer = Math.random() < 0.3 + 0.35 * diff;
+function spawnShark(o) {
   let x, y, ang;
   if (Math.random() < 0.5) {
     const s = Math.random() < 0.5 ? -1 : 1;
@@ -469,7 +470,49 @@ function spawnShark(o, diff) {
   } else {
     x = rand(-280, 280); y = o.y - rand(560, 680); ang = Math.PI / 2 + rand(-0.6, 0.6);
   }
-  o.sharks.push({ x, y, ang, killer, chase: 0, tired: 0, cd: 0, wig: rand(0, 6) });
+  o.sharks.push({ x, y, ang, helper: false, cd: 0, wig: rand(0, 6) });
+}
+// a helper shark: swims to an iceberg in your path and shoves it aside for a while
+function spawnHelper(o) {
+  const s = Math.random() < 0.5 ? -1 : 1;
+  o.sharks.push({ x: s * (OCEAN_HALF + 30), y: o.y - rand(150, 300), ang: s < 0 ? 0 : Math.PI, helper: true, mode: 'seek', berg: null, hold: 0, life: 14, cd: 0, wig: 0 });
+}
+function updateHelper(s, o, dt) {
+  s.life -= dt;
+  if (s.mode === 'seek') {
+    if (!s.berg || s.berg.held || s.berg.y > o.y - 40) {
+      // pick the most threatening berg ahead in the boat's path
+      s.berg = null; let best = 1e9;
+      for (const b of o.ice) {
+        if (b.held || b.y > o.y - 60 || b.y < o.y - 520) continue;
+        const lane = Math.abs(b.x - o.x) - b.r;
+        if (lane > 70) continue;
+        const score = (o.y - b.y) + lane * 2;
+        if (score < best) { best = score; s.berg = b; }
+      }
+    }
+    let tx = o.x + 60, ty = o.y - 90;
+    if (s.berg) { tx = s.berg.x; ty = s.berg.y; }
+    s.ang += clamp(angDiff(Math.atan2(ty - s.y, tx - s.x), s.ang), -4 * dt, 4 * dt);
+    const sp = 170;
+    s.x += Math.cos(s.ang) * sp * dt; s.y += Math.sin(s.ang) * sp * dt;
+    if (s.berg && dist(s.x, s.y, s.berg.x, s.berg.y) < s.berg.r + 14) {
+      s.mode = 'hold'; s.hold = 6; s.berg.held = s;
+      s.dir = Math.sign(s.berg.x - o.x) || (Math.random() < 0.5 ? -1 : 1);
+      msg('A friendly shark is shoving an iceberg out of your way!', '#ffd23f');
+    }
+    if (s.life <= 0) s.mode = 'leave';
+  } else if (s.mode === 'hold') {
+    const b = s.berg;
+    s.hold -= dt;
+    b.vx = 0;
+    b.x += s.dir * 70 * dt;
+    s.x = b.x - s.dir * (b.r + 8); s.y = b.y; s.ang = s.dir > 0 ? 0 : Math.PI;
+    if (s.hold <= 0) { b.held = null; s.mode = 'leave'; }
+  } else {
+    s.ang += clamp(angDiff(s.x < 0 ? Math.PI : 0, s.ang), -3 * dt, 3 * dt);
+    s.x += Math.cos(s.ang) * 140 * dt; s.y += Math.sin(s.ang) * 140 * dt;
+  }
 }
 function updateOcean(dt) {
   const o = G.ocean;
@@ -488,37 +531,31 @@ function updateOcean(dt) {
   o.oar += dt * (o.speed / 55) * 5;
 
   if (left > 15) {
-    o.iceAcc += dt * (o.speed / 100) * (0.5 + 1.0 * diff);
+    o.iceAcc += dt * (o.speed / 100) * (0.7 + 1.4 * diff);
     while (o.iceAcc >= 1) { o.iceAcc--; spawnBerg(o, -rand(560, 700), diff); }
     if (ot > 5) {
-      o.sharkAcc += dt * (0.1 + 0.26 * diff);
-      while (o.sharkAcc >= 1) { o.sharkAcc--; spawnShark(o, diff); }
+      o.sharkAcc += dt * (0.08 + 0.12 * diff);
+      while (o.sharkAcc >= 1) { o.sharkAcc--; spawnShark(o); }
     }
+    o.helperT -= dt;
+    if (o.helperT <= 0) { o.helperT = rand(12, 20); spawnHelper(o); }
   }
   const c1y = o.y - 11, c2y = o.y + 11;
   for (const b of o.ice) {
+    if (b.drifter && !b.held && b.y < o.y - 40) b.vx = clamp(b.vx + Math.sign(o.x - b.x) * 10 * dt, -28, 28);
     b.x += b.vx * dt;
     const rr = b.r * 0.82 + 9;
     if (dist(b.x, b.y, o.x, c1y) < rr || dist(b.x, b.y, o.x, c2y) < rr) return sinkPlayer('Lifeboat holed by an iceberg');
   }
   for (const s of o.sharks) {
     s.wig += dt * 6; s.cd = Math.max(0, s.cd - dt);
-    const dx = o.x - s.x, dy = o.y - s.y, d = Math.hypot(dx, dy);
-    let speed = 30, turn = 0.8, want = s.ang + Math.sin(s.wig * 0.15) * 0.5;
-    if (s.killer) {
-      if (d < 300 && s.tired <= 0) {
-        s.chase += dt;
-        want = Math.atan2(dy - o.speed * 0.3, dx);
-        speed = 60 + 28 * diff; turn = 1.5 + diff * 0.6;
-        if (s.chase > 7) { s.tired = 5; s.chase = 0; }
-      } else { s.tired -= dt; speed = 40; }
-    }
-    s.ang += clamp(angDiff(want, s.ang), -turn * dt, turn * dt);
-    s.x += Math.cos(s.ang) * speed * dt;
-    s.y += Math.sin(s.ang) * speed * dt;
+    if (s.helper) { updateHelper(s, o, dt); continue; }
+    const want = s.ang + Math.sin(s.wig * 0.15) * 0.5;
+    s.ang += clamp(angDiff(want, s.ang), -0.8 * dt, 0.8 * dt);
+    s.x += Math.cos(s.ang) * 30 * dt;
+    s.y += Math.sin(s.ang) * 30 * dt;
     const hx = s.x + Math.cos(s.ang) * 10, hy = s.y + Math.sin(s.ang) * 10;
     if (dist(hx, hy, o.x, c1y) < 15 || dist(hx, hy, o.x, c2y) < 15) {
-      if (s.killer) return sinkPlayer('Lifeboat capsized by a shark');
       if (s.cd <= 0) {
         o.vx += (o.x > s.x ? 1 : -1) * 110; s.ang += Math.PI; s.cd = 1.5;
         msg('A harmless basking shark bumps the boat.', '#9fb3c8');
@@ -527,7 +564,8 @@ function updateOcean(dt) {
     }
   }
   o.ice = o.ice.filter(b => b.y < o.y + 450);
-  o.sharks = o.sharks.filter(s => s.y < o.y + 500 && s.y > o.y - 950 && Math.abs(s.x) < 460);
+  o.sharks = o.sharks.filter(s => s.y < o.y + 500 && s.y > o.y - 950 && Math.abs(s.x) < 460 && !(s.helper && s.mode === 'leave' && Math.abs(s.x) > OCEAN_HALF + 20));
+  for (const b of o.ice) if (b.held && !o.sharks.includes(b.held)) b.held = null;
   if (left < 15 && !o.carp) { o.carp = true; msg('Lights on the horizon — the RMS CARPATHIA is coming!', '#ffd23f'); sound('horn'); }
 }
 function sinkPlayer(cause) {
@@ -556,7 +594,7 @@ function fastForward() {
 }
 function survScore(p) { return p.state === 'rescued' ? 1e6 : p.deathT; }
 
-if (typeof module !== 'undefined') module.exports = { newGame, step, fastForward, getG: () => G, T_RESCUE };
+if (typeof module !== 'undefined') module.exports = { newGame, step, fastForward, getG: () => G, T_RESCUE, input, board, launch, startOcean };
 
 // =====================================================================
 //  Everything below only runs in a browser
@@ -600,10 +638,10 @@ let muted = false;
 // ---------------- Input ----------------
 function readInput() {
   let x = 0, y = 0;
-  if (keys.KeyA || keys.ArrowLeft) x--;
-  if (keys.KeyD || keys.ArrowRight) x++;
-  if (keys.KeyW || keys.ArrowUp) y--;
-  if (keys.KeyS || keys.ArrowDown) y++;
+  if (keys.ArrowLeft) x--;
+  if (keys.ArrowRight) x++;
+  if (keys.ArrowUp) y--;
+  if (keys.ArrowDown) y++;
   let sprint = !!(keys.ShiftLeft || keys.ShiftRight);
   if (touch.id !== null) {
     const dx = touch.x - touch.ox, dy = touch.y - touch.oy, m = Math.hypot(dx, dy);
@@ -926,15 +964,26 @@ function renderOcean() {
     if (sh.y < y0 - 60 || sh.y > y1 + 60) continue;
     ctx.save(); ctx.translate(sh.x, sh.y); ctx.rotate(sh.ang);
     const wig = Math.sin(sh.wig) * 0.25;
-    ctx.fillStyle = sh.killer ? 'rgba(20,20,30,0.55)' : 'rgba(40,60,80,0.4)';
-    ctx.beginPath(); ctx.ellipse(0, 0, sh.killer ? 22 : 19, sh.killer ? 7 : 6, 0, 0, 7); ctx.fill();
+    if (sh.helper) {
+      ctx.save(); ctx.rotate(-sh.ang);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 34);
+      g.addColorStop(0, 'rgba(255,210,63,0.35)'); g.addColorStop(1, 'rgba(255,210,63,0)');
+      ctx.fillStyle = g; ctx.fillRect(-34, -34, 68, 68); ctx.restore();
+    }
+    ctx.fillStyle = sh.helper ? 'rgba(30,90,110,0.6)' : 'rgba(40,60,80,0.4)';
+    ctx.beginPath(); ctx.ellipse(0, 0, sh.helper ? 22 : 19, sh.helper ? 7 : 6, 0, 0, 7); ctx.fill();
     ctx.beginPath(); ctx.moveTo(-18, 0); ctx.lineTo(-30, -7 + wig * 10); ctx.lineTo(-27, 0); ctx.lineTo(-30, 7 + wig * 10); ctx.closePath(); ctx.fill();
     ctx.strokeStyle = 'rgba(200,230,255,0.35)'; ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(4, -4); ctx.lineTo(-14, -9); ctx.moveTo(4, 4); ctx.lineTo(-14, 9); ctx.stroke();
-    ctx.fillStyle = sh.killer ? '#2a2f36' : '#9aa9b6';
+    ctx.fillStyle = sh.helper ? '#ffd23f' : '#9aa9b6';
     ctx.beginPath(); ctx.moveTo(6, 0); ctx.lineTo(-6, -4); ctx.lineTo(-4, 0); ctx.lineTo(-6, 4); ctx.closePath(); ctx.fill();
-    if (sh.killer) { ctx.strokeStyle = '#ff3b3b'; ctx.lineWidth = 1.6; ctx.stroke(); circle(10, -3, 1.3, '#ff3b3b'); circle(10, 3, 1.3, '#ff3b3b'); }
+    if (sh.helper) { ctx.strokeStyle = '#fff3c0'; ctx.lineWidth = 1.2; ctx.stroke(); }
     ctx.restore();
+    if (sh.helper && sh.mode === 'hold') {
+      const b = sh.berg;
+      ctx.strokeStyle = 'rgba(255,210,63,0.85)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 1.2 + 6, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (sh.hold / 6)); ctx.stroke();
+    }
   }
 
   // player's boat
@@ -1209,7 +1258,7 @@ function initUI() {
     startGame();
     if (m[1] === 'ocean') {
       const b = G.boats.find(b => b.state !== 'launched');
-      G.player.x = b.gx; G.player.y = b.gy; board(G.player, b, G.boats.indexOf(b)); launch(b); startOcean();
+      G.player.x = b.gx; G.player.y = b.gy; board(G.player, b, G.boats.indexOf(b)); launch(b); startOcean(); G.ocean.helperT = 0.5;
     }
     const end = G.t + +m[2];
     while (G.t < end && !G.done) { input.dx = Math.sin(G.t) * 0.5; step(1 / 30); }
